@@ -1,0 +1,7 @@
+_version: 2
+commands.help.message:
+  en: |
+    <p>You may use this bot with !&lt;commands&gt;</p>
+    <ul>
+    <li><b>!help</b> - Sends this message</li>
+    </ul>
