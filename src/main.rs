@@ -165,16 +165,13 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
         return;
     }
     // Then, we're assuring that the event we're dealing with has not been sent by us
-    //if event.sender == client.user_id().unwrap() {
-    //    return;
-    //}
+    if event.sender == client.user_id().unwrap() {
+        return;
+    }
     
     
 
     let MessageType::Text(text_content) = event.content.msgtype else { return };
-
-    println!{"{:?}", text_content.formatted}
-    println!{"{:?}", text_content.body}
 
     //if text_content.body.starts_with("!party") {
     //    let content = RoomMessageEventContent::text_plain("🎉🎊🥳 let's PARTY!! 🥳🎊🎉");
