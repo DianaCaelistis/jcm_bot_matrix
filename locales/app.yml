@@ -1,7 +1,29 @@
 _version: 2
 commands.help.message:
   en: |
-    <p>You may use this bot with !&lt;commands&gt;</p>
+    <p>You may use this bot with !&lt;command&gt;</p>
     <ul>
     <li><b>!help</b> - Sends this message</li>
+    <li><b>!chat</b> - Create a chat to talk with me... or any other bot user :3, use without args to get usage info</li>
+    <li><b>!ping</b> - gnip!</li>
+    </ul>
+commands.chat.usage:
+  en: |
+    <p>Usage: !chat [options] &lt;command &lt;arg&gt;&gt;</p>
+    <header><h1>Commands</h1></header>
+    <ul>
+    <li> create - Creates a new chat and attaches to it, the bot will then send you the chat ID, normal users may only create chats with the -T option</li>
+    <li> attach - Attaches to an existant chat</li>
+    <li> delete - Deletes a chat, you need level 3 permissions (bot admin)</li>
+    <li> close - Closes a chat, you need level 2 permissions (chat creator) or higher, no one will be able to send messages to a closed chat but their history may still be accessed. Closing chats is permanent.</li>
+    </ul>
+
+    <header><h1>Options</h1></header>
+    <ul>
+    <li> -H, --history - Enables display chat messages history when attaching</li>
+    <li> -S, --store - Disables the bot's ability to store your messages when attached to a chat, this may be useful to avoid unwanted eyes to lurk chat history</li>
+    <li> -A, --anonymous - Use to attach to a chat as an "anonymous" ID, the bot's owner only may still see 
+    what's your username through the bot's database</li>
+    <li> -F, --fuckanons - This option makes you anon-proof, using this when attaching will assure that anons won't receive your messages, take note: anonymous bot admins will receive them anyway</li>
+    <li> -T, --ticket - Use this option to create a chat with the bot admin(s), you won't be able to attach to a ticket chat as anonymous</li>
     </ul>

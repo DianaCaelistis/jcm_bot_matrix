@@ -16,7 +16,7 @@ use matrix_sdk::{
     config::SyncSettings,
     ruma::events::room::{
         member::StrippedRoomMemberEvent,
-        message::{FormattedBody, MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+        message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
     },
     Client, Room, RoomState,
 };
@@ -173,13 +173,6 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
 
     let MessageType::Text(text_content) = event.content.msgtype else { return };
 
-    //if text_content.body.starts_with("!party") {
-    //    let content = RoomMessageEventContent::text_plain("🎉🎊🥳 let's PARTY!! 🥳🎊🎉");
-    //    println!("sending");
-    //   // send our message to the room we found the "!party" command in
-    //    room.send(content).await.unwrap();
-    //    println!("message sent");
-    //}
 
     if text_content.body.starts_with("!help") {
         room.send(
@@ -188,6 +181,15 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
             )
         ).await.unwrap();
     }
+
+    if text_content.body.starts_with("!chat") {
+        room.send(
+            RoomMessageEventContent::text_html_auto(
+                t!("commands.chat.usage")
+            )
+        ).await.unwrap();
+    }
+
 }
 
 pub trait HtmlContentOnce {
