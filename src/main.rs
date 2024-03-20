@@ -152,7 +152,7 @@ async fn on_stripped_state_member(
 }
 
 // This fn is called whenever we see a new room message event
-async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client: Client) -> Result< {
+async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client: Client) {
     // First, we need to unpack the message: We only want messages from rooms we are
     // still in and that are regular text messages - ignoring everything else.
     if room.state() != RoomState::Joined {
