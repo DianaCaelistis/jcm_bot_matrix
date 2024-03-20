@@ -11,7 +11,7 @@
 /// various parts and what they do
 // The imports we need
 use std::{env, process::exit};
-
+use rusqlite::{params, Connection, Result};
 use matrix_sdk::{
     config::SyncSettings,
     ruma::events::room::{
@@ -29,7 +29,6 @@ use rust_i18n::t;
 extern crate rust_i18n;
 
 i18n!("locales");
-
 
 /// This is the starting point of the app. `main` is called by rust binaries to
 /// run the program in this case, we use tokio (a reactor) to allow us to use
@@ -152,13 +151,8 @@ async fn on_stripped_state_member(
     });
 }
 
-// This fn is called whenever we see a new room message event. You notice that
-// the difference between this and the other function that we've given to the
-// handler lies only in their input parameters. However, that is enough for the
-// rust-sdk to figure out which one to call and only do so, when the parameters
-// are available.
-async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client: Client) {
-
+// This fn is called whenever we see a new room message event
+async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client: Client) -> Result< {
     // First, we need to unpack the message: We only want messages from rooms we are
     // still in and that are regular text messages - ignoring everything else.
     if room.state() != RoomState::Joined {
@@ -168,8 +162,24 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
     if event.sender == client.user_id().unwrap() {
         return;
     }
-    
-    
+    let conn = Connection::open_in_memory()?;
+    let bot_user: BotUser = BotUser::initialize_user(event.sender.to_string());
+    conn.execute(
+        "CREATE TABLE ?1 (
+            matrix_user TEXT NOT NULL,
+            ticket_room BLOB,
+            attached_to BLOB,
+            is_admin INTEGER,
+            is_banned INTEGER
+        )",
+        (), // empty list of parameters.
+    )?;
+    conn.execute(
+        "INSERT INTO ?1 (matrix_user, ticket_room, attached_to, is_admin, is_banned) VALUES (?1, ?2, ?3, ?4)",
+        (&bot_user.matrix_user, &bot_user.ticket_room, &bot_user.attached_to, &bot_user.is_admin, &bot_user.is_banned),
+    )?;
+
+
 
     let MessageType::Text(text_content) = event.content.msgtype else { return };
 
@@ -192,7 +202,29 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
                 ).await.unwrap();
             }
             Some(_) => {
-                println!("{:?}", text_content.body.args())
+                let arguments: Vec<String> = text_content.body.args().unwrap();
+                println!("{:?}", arguments);
+                let mut have_options: bool = false;
+                for arg in arguments {
+                    if arg.starts_with("-"){
+                        have_options = true
+                    } else
+                    if arg == "create" {
+                        ()
+                    } else 
+                    if arg == "attach" {
+                        ()
+                    } else 
+                    if arg == "delete" {
+                        ()
+                    } else 
+                    if arg == "close" {
+                        ()
+                    }
+                }
+                if have_options {
+                    println!("We got options!")
+                }
             }
         }
 
@@ -239,4 +271,51 @@ impl ParseArguments for String {
             None
         }
     }
+}
+
+#[derive(Debug)]
+struct BotUser {
+    matrix_user: String,
+    ticket_room: Option<String>,
+    attached_to: Option<String>,
+    is_admin: bool,
+    is_banned: bool
+}
+
+impl BotUser {
+    fn initialize_user(matrix_user: String) -> BotUser {
+        BotUser {
+            matrix_user: matrix_user,
+            ticket_room: None,
+            attached_to: None,
+            is_admin: false,
+            is_banned: false
+        }
+    }
+}
+
+//TODO What happens if an user attaches to a chat as an anon and as normal?
+#[derive(Debug)]
+struct FluxChatUser {
+    matrix_user: String,
+    display_name: String,
+    is_anon: bool
+}
+
+#[derive(Debug)]
+struct FluxChatMessage {
+    date: [u64; 5],
+    text: String,
+    can_anon_read: bool,
+    sender: FluxChatUser
+}
+
+#[derive(Debug)]
+struct FluxChatRoom {
+    id: String,
+    creation_date: [u64; 5],
+    creator: String,
+    touched_by_users: Vec<FluxChatUser>,
+    messages: Vec<FluxChatMessage>,
+    is_closed: bool
 }
