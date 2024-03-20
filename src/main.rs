@@ -16,7 +16,7 @@ use matrix_sdk::{
     config::SyncSettings,
     ruma::events::room::{
         member::StrippedRoomMemberEvent,
-        message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+        message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent, TextMessageEventContent},
     },
     Client, Room, RoomState,
 };
@@ -183,13 +183,22 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
     }
 
     if text_content.body.starts_with("!chat") {
-        room.send(
-            RoomMessageEventContent::text_html_auto(
-                t!("commands.chat.usage")
-            )
-        ).await.unwrap();
-    }
+        match text_content.body.args() {
+            None => {
+                room.send(
+                    RoomMessageEventContent::text_html_auto(
+                        t!("commands.chat.usage")
+                    )
+                ).await.unwrap();
+            }
+            Some(_) => {
+                println!("{:?}", text_content.body.args())
+            }
+        }
 
+
+    }
+ 
 }
 
 pub trait HtmlContentOnce {
@@ -211,5 +220,23 @@ pub trait HtmlContentOnce {
 impl HtmlContentOnce for RoomMessageEventContent {
     fn text_html_auto(txt: impl AsRef<str>) -> RoomMessageEventContent {
         RoomMessageEventContent::text_html(Self::strip(txt.as_ref()), txt.as_ref())
+    }
+}
+
+
+/// Converts a string into a vector of strings, I'm feeling dirty for doing this...
+pub trait ParseArguments {
+    fn args(&self) -> Option<Vec<String>>;
+}
+
+impl ParseArguments for String {
+    fn args(&self) -> Option<Vec<String>> {
+        let have_args: Option<usize> = self.find(" ");
+        if have_args.is_some() {
+            let command_args: Vec<String> = self.split_whitespace().map(str::to_string).collect();
+            Some(command_args)
+        } else {
+            None
+        }
     }
 }
