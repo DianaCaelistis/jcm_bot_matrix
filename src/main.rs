@@ -1,15 +1,3 @@
-///
-///  This is an example showcasing how to build a very simple bot using the
-/// matrix-sdk. To try it, you need a rust build setup, then you can run:
-/// `cargo run -p example-getting-started -- <homeserver_url> <user> <password>`
-///
-/// Use a second client to open a DM to your bot or invite them into some room.
-/// You should see it automatically join. Then post `!party` to see the client
-/// in action.
-///
-/// Below the code has a lot of inline documentation to help you understand the
-/// various parts and what they do
-// The imports we need
 use std::{env, process::exit};
 use rusqlite::{params, Connection, Result, Statement};
 use matrix_sdk::{
@@ -22,18 +10,14 @@ use matrix_sdk::{
 };
 use tokio::time::{sleep, Duration};
 use chrono::prelude::*;
+use rand::Rng;
 
 // Initializing i18
 use rust_i18n::t;
-
 #[macro_use]
 extern crate rust_i18n;
-
 i18n!("locales");
 
-/// This is the starting point of the app. `main` is called by rust binaries to
-/// run the program in this case, we use tokio (a reactor) to allow us to use
-/// an `async` function run.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
@@ -68,11 +52,6 @@ async fn login_and_sync(
     username: &str,
     password: &str,
 ) -> anyhow::Result<()> {
-    // First, we set up the client.
-
-    // Note that when encryption is enabled, you should use a persistent store to be
-    // able to restore the session with a working encryption setup.
-    // See the `persist_session` example.
     let client = Client::builder()
         // We use the convenient client builder to set our custom homeserver URL on it.
         .homeserver_url(homeserver_url)
@@ -85,8 +64,6 @@ async fn login_and_sync(
         .login_username(username, password)
         .initial_device_display_name("getting started bot")
         .await?;
-
-    // It worked!
     println!("logged in as {username}");
 
     // Now, we want our client to react to invites. Invites sent us stripped member
@@ -228,7 +205,8 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
                     }
                     if arg == "create" {
                             if bot_user.is_admin {
-                            () // Create the room for admins
+                                let mut new_chat: FluxChatRoom = FluxChatRoom::admin_new(&bot_user.matrix_user);
+
                         } else {
                             if options.ticket {
                                 () // Create a ticket room
@@ -362,7 +340,8 @@ impl ChatCommandOptions {
 struct FluxChatUser {
     matrix_user: String,
     display_name: String,
-    is_anon: bool
+    is_anon: bool,
+    chat_id: String
 }
 
 #[derive(Debug)]
@@ -373,7 +352,21 @@ struct FluxChatRoom {
     is_closed: bool
 }
 
-struct FluxChatLink {
-    matrix_user: String,
-    chat_id: String
+impl FluxChatRoom {
+    fn admin_new(creator: impl ToString) -> FluxChatRoom {
+        let mut chat_id: String = (0..4).map(|_| char::from(rand::random::<u8>())).collect();
+        chat_id.push('-');
+        chat_id.push_str(&((0..4).map(|_| char::from(rand::random::<u8>())).collect::<String>()));
+
+        let current_date = Local::now();
+        let current_date_string = current_date.format("%Y-%m-%d %H:%M:%S").to_string();
+
+        FluxChatRoom {
+            id: chat_id,
+            creation_date: current_date_string,
+            creator: creator.to_string(),
+            is_closed: false
+        }
+    }
 }
+
