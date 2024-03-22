@@ -1,5 +1,6 @@
-use std::{env, process::exit};
-use rusqlite::{params, Connection, Result, Statement};
+use std::{env, process::exit, path::Path};
+use anyhow::Error;
+use rusqlite::{params, Connection, Result, Statement, OpenFlags};
 use matrix_sdk::{
     config::SyncSettings,
     ruma::events::room::{
@@ -141,19 +142,10 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
     if event.sender == client.user_id().unwrap() {
         return Ok(());
     }
-    let conn = Connection::open("./db1.db")?;
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS bot_users (
-            matrix_user TEXT NOT NULL,
-            ticket_room TEXT,
-            attached_to TEXT,
-            is_admin INTEGER,
-            is_banned INTEGER
-        )",
-        (),
-    )?;
+    let conn = initialize_db("./db1.db");
 
-    let bot_user: BotUser = match conn.query_row(
+
+    let mut bot_user: BotUser = match conn.query_row(
         "SELECT matrix_user FROM bot_users WHERE matrix_user=?1", 
         params![&event.sender.to_string()],
         |row| row.get::<usize, String>(0)
@@ -206,6 +198,13 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
                     if arg == "create" {
                             if bot_user.is_admin {
                                 let mut new_chat: FluxChatRoom = FluxChatRoom::admin_new(&bot_user.matrix_user);
+                                if bot_user.attached_to != "" {
+                                    () // TODO this should return a gigantic error because should be an unreachable point of the code,
+                                       // No user should be in fact able to use any bot command while attached to a chat!
+                                } else {
+                                    bot_user.attached_to = new_chat.id
+                                }
+                                
 
                         } else {
                             if options.ticket {
@@ -288,6 +287,7 @@ struct BotUser {
 }
 
 impl BotUser {
+    /// Initialize an user struct with default data and the User ID
     fn initialize_user(matrix_user: String) -> BotUser {
         BotUser {
             matrix_user: matrix_user,
@@ -298,6 +298,7 @@ impl BotUser {
         }
     }
 
+    /// Retrieve the user's struct for an user already in database
     fn user_from_db_row(matrix_user: String, conn: &Connection) -> BotUser {
         let mut stmt: Statement = conn.prepare("SELECT * FROM bot_users WHERE matrix_user=?1").unwrap();
         BotUser {
@@ -368,5 +369,60 @@ impl FluxChatRoom {
             is_closed: false
         }
     }
+
+    fn push_to_db(self, conn: Connection) -> anyhow::Result<FluxChatRoom> {
+        conn.execute(
+            "UPDATE flux_chat_rooms
+            SET is_closed=?2
+            WHERE id=?1",
+        params![&self.id, &self.is_closed])?;
+        Result::Ok(self)
+    }
 }
 
+
+/// Connects to pre-existing database or generates a new working one :3
+/// 
+/// Without this function we basically can't get the bot to work, in fact
+/// this function role is to connect to an existing database or initialize one
+/// with the tables needed for the bot to work. Always use this to generate new databases
+/// or generate manually the tables below
+pub fn initialize_db(path: impl AsRef<Path>) -> Connection {
+    let conn = match Connection::open_with_flags(&path, {
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX
+        | OpenFlags::SQLITE_OPEN_URI
+    }) {
+        Ok(val) => {
+            val
+        },
+        Err(_) => {
+            let temp_conn = Connection::open(&path).unwrap();
+            temp_conn.execute(
+                "CREATE TABLE bot_users (
+                    matrix_user TEXT NOT NULL,
+                    ticket_room TEXT,
+                    attached_to TEXT,
+                    is_admin INTEGER,
+                    is_banned INTEGER
+                )",
+                ()).unwrap();
+            temp_conn.execute(
+                "CREATE TABLE flux_chat_rooms (
+                    id TEXT NOT NULL,
+                    creation_date TEXT NOT NULL,
+                    creator TEXT NOT NULL,
+                    is_closed INTEGER
+                )", ()).unwrap();
+            temp_conn.execute(
+                "CREATE TABLE flux_chat_users (
+                    matrix_user TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    is_anon INTEGER,
+                    chat_id TEXT NOT NULL
+                )", ()).unwrap();
+            temp_conn
+        }
+    };
+    conn
+}
