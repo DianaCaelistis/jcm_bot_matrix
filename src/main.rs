@@ -1,17 +1,17 @@
-use std::{env, process::exit, path::Path};
-use anyhow::Error;
+use std::{borrow::Borrow, env, path::Path, process::exit};
+use rand::Rng;
 use rusqlite::{params, Connection, Result, Statement, OpenFlags};
 use matrix_sdk::{
     config::SyncSettings,
     ruma::events::room::{
         member::StrippedRoomMemberEvent,
-        message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent, TextMessageEventContent},
+        message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEvent, RoomMessageEventContent},
     },
     Client, Room, RoomState,
 };
 use tokio::time::{sleep, Duration};
 use chrono::prelude::*;
-use rand::Rng;
+
 
 // Initializing i18
 use rust_i18n::t;
@@ -142,6 +142,7 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
     if event.sender == client.user_id().unwrap() {
         return Ok(());
     }
+
     let conn = initialize_db("./db1.db");
 
 
@@ -197,15 +198,17 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
                     }
                     if arg == "create" {
                             if bot_user.is_admin {
-                                let mut new_chat: FluxChatRoom = FluxChatRoom::admin_new(&bot_user.matrix_user);
+                                let new_chat: FluxChatRoom = FluxChatRoom::admin_new(&bot_user.matrix_user, &conn).unwrap();
                                 if bot_user.attached_to != "" {
                                     () // TODO this should return a gigantic error because should be an unreachable point of the code,
                                        // No user should be in fact able to use any bot command while attached to a chat!
                                 } else {
-                                    bot_user.attached_to = new_chat.id
+                                    bot_user.attached_to = new_chat.id.to_string()
                                 }
-                                
-
+                                bot_user.push_to_db(&conn).unwrap();
+                                new_chat.push_to_db(&conn).unwrap();
+                                room.send(RoomMessageEventContent::text_html_auto(
+                                    t!("commands.chat.create.success", id=&new_chat.id))).await.unwrap();
                         } else {
                             if options.ticket {
                                 () // Create a ticket room
@@ -232,6 +235,22 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
         }
 
     
+    }
+
+
+    // The first time we run the bot we DEFINITELY WANT to issue this command to take the bot ownership
+    if text_content.body.starts_with("!sumyself") {
+        let sumyself = conn.query_row("SELECT used FROM sumyself", (), |row| row.get::<usize, bool>(0)).unwrap();
+        if sumyself {
+            // Do nothing
+        } else {
+            conn.execute("UPDATE sumyself SET used=1 WHERE used=0", ()).unwrap();
+            bot_user.is_admin = true;
+            bot_user.push_to_db(&conn).unwrap();
+            room.send(RoomMessageEventContent::text_html_auto(
+                t!("commands.sumyself.success")
+            )).await.unwrap();
+        }
     }
 
     Ok(())
@@ -277,7 +296,7 @@ impl ParseArguments for String {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BotUser {
     matrix_user: String,
     ticket_room: String,
@@ -310,6 +329,22 @@ impl BotUser {
 
         } 
     }
+
+
+    /// Updates the database with new bot User values
+    /// 
+    /// Please, take note that matrix_user should 
+    /// never change, therefore it won't be pushed to the database.
+    /// 
+    /// Returns the passed struct on success
+    fn push_to_db(&self, conn: &Connection) -> anyhow::Result<BotUser> {
+        conn.execute(
+            "UPDATE bot_users
+            SET ticket_room=?1, attached_to=?2, is_admin=?3, is_banned=?4
+            WHERE matrix_user=?5",
+        params![&self.ticket_room, &self.attached_to, &self.is_admin, &self.is_banned, &self.matrix_user])?;
+        Result::Ok(self.clone())
+    }
 }
 
 
@@ -337,7 +372,7 @@ impl ChatCommandOptions {
 
 
 //TODO What happens if an user attaches to a chat as an anon and as normal?
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FluxChatUser {
     matrix_user: String,
     display_name: String,
@@ -345,7 +380,7 @@ struct FluxChatUser {
     chat_id: String
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FluxChatRoom {
     id: String,
     creation_date: String,
@@ -354,29 +389,41 @@ struct FluxChatRoom {
 }
 
 impl FluxChatRoom {
-    fn admin_new(creator: impl ToString) -> FluxChatRoom {
-        let mut chat_id: String = (0..4).map(|_| char::from(rand::random::<u8>())).collect();
+    /// Initializes a FluxChatRoom struct and pushes it to the database, returns the newly
+    /// created struct (or error, Result<FluxChatRoom, E>)
+    fn admin_new(creator: impl ToString, conn: &Connection) -> anyhow::Result<FluxChatRoom> {
+        let mut generator = rand::thread_rng();
+        let mut chat_id: String = (0..4).map(|_| char::from(generator.gen_range(65..=90))).collect();
         chat_id.push('-');
-        chat_id.push_str(&((0..4).map(|_| char::from(rand::random::<u8>())).collect::<String>()));
+        chat_id.push_str(&((0..4).map(|_| char::from(generator.gen_range(65..=90))).collect::<String>()));
 
         let current_date = Local::now();
         let current_date_string = current_date.format("%Y-%m-%d %H:%M:%S").to_string();
-
-        FluxChatRoom {
+        conn.execute(
+            "INSERT INTO flux_chat_rooms (id, creation_date, creator, is_closed) VALUES (?1, ?2, ?3, ?4)",
+            params![&chat_id, &current_date_string, creator.to_string(), false]
+        )?;
+        Result::Ok(FluxChatRoom {
             id: chat_id,
             creation_date: current_date_string,
             creator: creator.to_string(),
             is_closed: false
-        }
+        })
     }
 
-    fn push_to_db(self, conn: Connection) -> anyhow::Result<FluxChatRoom> {
+    /// Updates the database with new FluxChatRoom values
+    /// 
+    /// Please, take note that any value that is
+    /// not is_closed shouldn't be changed since Chat creation so those values won't be pushed.
+    /// 
+    /// Returns the inserted struct on success
+    fn push_to_db(&self, conn: &Connection) -> anyhow::Result<FluxChatRoom> {
         conn.execute(
             "UPDATE flux_chat_rooms
             SET is_closed=?2
             WHERE id=?1",
         params![&self.id, &self.is_closed])?;
-        Result::Ok(self)
+        Result::Ok(self.clone())
     }
 }
 
@@ -394,9 +441,11 @@ pub fn initialize_db(path: impl AsRef<Path>) -> Connection {
         | OpenFlags::SQLITE_OPEN_URI
     }) {
         Ok(val) => {
+            println!("Database found! Loading...");
             val
         },
         Err(_) => {
+            println!("Database not found! Generating a new one :3");
             let temp_conn = Connection::open(&path).unwrap();
             temp_conn.execute(
                 "CREATE TABLE bot_users (
@@ -421,6 +470,12 @@ pub fn initialize_db(path: impl AsRef<Path>) -> Connection {
                     is_anon INTEGER,
                     chat_id TEXT NOT NULL
                 )", ()).unwrap();
+            temp_conn.execute(
+                "CREATE TABLE sumyself (
+                    used INTEGER
+                )", ()
+            ).unwrap();
+            temp_conn.execute("INSERT INTO sumyself (used) VALUES (0)", ()).unwrap();
             temp_conn
         }
     };

@@ -27,3 +27,12 @@ commands.chat.usage:
     <li> -F, --fuckanons - This option makes you anon-proof, using this when attaching will assure that anons won't receive your messages, take note: anonymous bot admins will receive them anyway</li>
     <li> -T, --ticket - Use this option to create a chat with the bot admin(s), you won't be able to attach to a ticket chat as anonymous</li>
     </ul>
+commands.chat.create.success:
+  en: |
+    <p>Oh, my, God! You did it :3, a new chat has been created and you've already been attached to it.</p>
+    <p>The Chat ID is: <code>%{id}</code>, take care of it and don't forget it or 
+    you won't be able to attach to this chat anymore!</p>
+    <p>You may invite people to the chat by giving them the id, tell them to <code>!chat attach %{id}</code></p>
+commands.sumyself.success:
+  en: |
+    <p>You've successfully made yourself an admin! This command's usage will be disabled until database regeneration</p>
