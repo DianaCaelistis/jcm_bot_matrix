@@ -21,6 +21,7 @@ use matrix_sdk::{
     Client, Room, RoomState,
 };
 use tokio::time::{sleep, Duration};
+use chrono::prelude::*;
 
 // Initializing i18
 use rust_i18n::t;
@@ -35,6 +36,7 @@ i18n!("locales");
 /// an `async` function run.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+
     rust_i18n::set_locale("en");
 
     // set up some simple stderr logging. You can configure it by changing the env
@@ -152,36 +154,36 @@ async fn on_stripped_state_member(
 }
 
 // This fn is called whenever we see a new room message event
-async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client: Client) {
+async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client: Client) -> anyhow::Result<()> {
     // First, we need to unpack the message: We only want messages from rooms we are
     // still in and that are regular text messages - ignoring everything else.
     if room.state() != RoomState::Joined {
-        return;
+        return Ok(());
     }
     // Then, we're assuring that the event we're dealing with has not been sent by us
     if event.sender == client.user_id().unwrap() {
-        return;
+        return Ok(());
     }
-    let conn = Connection::open_in_memory()?;
-    let bot_user: BotUser = BotUser::initialize_user(event.sender.to_string());
+    let conn = Connection::open("./db1.db")?;
     conn.execute(
-        "CREATE TABLE ?1 (
+        "CREATE TABLE IF NOT EXISTS bot_users (
             matrix_user TEXT NOT NULL,
-            ticket_room BLOB,
-            attached_to BLOB,
+            ticket_room TEXT,
+            attached_to TEXT,
             is_admin INTEGER,
             is_banned INTEGER
         )",
-        (), // empty list of parameters.
+        (),
     )?;
+    let bot_user: BotUser = BotUser::initialize_user(event.sender.to_string());
     conn.execute(
-        "INSERT INTO ?1 (matrix_user, ticket_room, attached_to, is_admin, is_banned) VALUES (?1, ?2, ?3, ?4)",
-        (&bot_user.matrix_user, &bot_user.ticket_room, &bot_user.attached_to, &bot_user.is_admin, &bot_user.is_banned),
-    )?;
+        "INSERT INTO bot_users (matrix_user, ticket_room, attached_to, is_admin, is_banned) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![&bot_user.matrix_user, &bot_user.ticket_room, &bot_user.attached_to, &bot_user.is_admin, &bot_user.is_banned],
+    ).unwrap();
+ 
 
 
-
-    let MessageType::Text(text_content) = event.content.msgtype else { return };
+    let MessageType::Text(text_content) = event.content.msgtype else { return Ok(()) };
 
 
     if text_content.body.starts_with("!help") {
@@ -204,13 +206,19 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
             Some(_) => {
                 let arguments: Vec<String> = text_content.body.args().unwrap();
                 println!("{:?}", arguments);
-                let mut have_options: bool = false;
+                let mut options: ChatCommandOptions = ChatCommandOptions::new();
                 for arg in arguments {
                     if arg.starts_with("-"){
-                        have_options = true
-                    } else
+                        if arg == "-A" || arg == "--anonymous" {
+                            options.anonymous = true
+                        } else if arg == "-F" || arg == "--fuckanons" {
+                            options.fuckanons = true
+                        } else if arg == "-T" || arg == "--ticket" {
+                            options.ticket = true
+                        } else { }
+                    }
                     if arg == "create" {
-                        ()
+
                     } else 
                     if arg == "attach" {
                         ()
@@ -222,15 +230,16 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
                         ()
                     }
                 }
-                if have_options {
+                if options.has_options() {
                     println!("We got options!")
                 }
             }
         }
 
-
+    
     }
- 
+
+    Ok(())
 }
 
 pub trait HtmlContentOnce {
@@ -276,8 +285,8 @@ impl ParseArguments for String {
 #[derive(Debug)]
 struct BotUser {
     matrix_user: String,
-    ticket_room: Option<String>,
-    attached_to: Option<String>,
+    ticket_room: String,
+    attached_to: String,
     is_admin: bool,
     is_banned: bool
 }
@@ -286,13 +295,37 @@ impl BotUser {
     fn initialize_user(matrix_user: String) -> BotUser {
         BotUser {
             matrix_user: matrix_user,
-            ticket_room: None,
-            attached_to: None,
+            ticket_room: String::new(),
+            attached_to: String::new(),
             is_admin: false,
             is_banned: false
         }
     }
 }
+
+
+struct ChatCommandOptions {
+    anonymous: bool,
+    fuckanons: bool,
+    ticket: bool
+}
+
+impl ChatCommandOptions {
+    fn new() -> ChatCommandOptions {
+        ChatCommandOptions{
+            anonymous: false,
+            fuckanons: false,
+            ticket: false
+        }
+    }
+
+    fn has_options(&self) -> bool {
+        if self.anonymous || self.fuckanons || self.ticket {
+            true
+        } else {false}
+    }
+}
+
 
 //TODO What happens if an user attaches to a chat as an anon and as normal?
 #[derive(Debug)]
@@ -303,19 +336,14 @@ struct FluxChatUser {
 }
 
 #[derive(Debug)]
-struct FluxChatMessage {
-    date: [u64; 5],
-    text: String,
-    can_anon_read: bool,
-    sender: FluxChatUser
-}
-
-#[derive(Debug)]
 struct FluxChatRoom {
     id: String,
-    creation_date: [u64; 5],
+    creation_date: String,
     creator: String,
-    touched_by_users: Vec<FluxChatUser>,
-    messages: Vec<FluxChatMessage>,
     is_closed: bool
+}
+
+struct FluxChatLink {
+    matrix_user: String,
+    chat_id: String
 }
