@@ -11,7 +11,7 @@
 /// various parts and what they do
 // The imports we need
 use std::{env, process::exit};
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, Result, Statement};
 use matrix_sdk::{
     config::SyncSettings,
     ruma::events::room::{
@@ -175,13 +175,22 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
         )",
         (),
     )?;
-    let bot_user: BotUser = BotUser::initialize_user(event.sender.to_string());
-    conn.execute(
-        "INSERT INTO bot_users (matrix_user, ticket_room, attached_to, is_admin, is_banned) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![&bot_user.matrix_user, &bot_user.ticket_room, &bot_user.attached_to, &bot_user.is_admin, &bot_user.is_banned],
-    ).unwrap();
- 
 
+    let bot_user: BotUser = match conn.query_row(
+        "SELECT matrix_user FROM bot_users WHERE matrix_user=?1", 
+        params![&event.sender.to_string()],
+        |row| row.get::<usize, String>(0)
+    ) {
+        Ok(_) => BotUser::user_from_db_row(event.sender.to_string(), &conn),
+        Err(_) => {
+            let bot_user: BotUser = BotUser::initialize_user(event.sender.to_string());
+            conn.execute(
+                "INSERT INTO bot_users (matrix_user, ticket_room, attached_to, is_admin, is_banned) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![&bot_user.matrix_user, &bot_user.ticket_room, &bot_user.attached_to, &bot_user.is_admin, &bot_user.is_banned],
+            ).unwrap();
+            bot_user
+        }
+    };
 
     let MessageType::Text(text_content) = event.content.msgtype else { return Ok(()) };
 
@@ -218,7 +227,16 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
                         } else { }
                     }
                     if arg == "create" {
-
+                            if bot_user.is_admin {
+                            () // Create the room for admins
+                        } else {
+                            if options.ticket {
+                                () // Create a ticket room
+                            } else {
+                                // Send error message, you must specify -T option, or create the room and then 
+                                // tell them it's a ticket room
+                            }
+                        }
                     } else 
                     if arg == "attach" {
                         ()
@@ -300,6 +318,18 @@ impl BotUser {
             is_admin: false,
             is_banned: false
         }
+    }
+
+    fn user_from_db_row(matrix_user: String, conn: &Connection) -> BotUser {
+        let mut stmt: Statement = conn.prepare("SELECT * FROM bot_users WHERE matrix_user=?1").unwrap();
+        BotUser {
+            matrix_user: (&matrix_user).to_owned(),
+            ticket_room: stmt.query_row(params![&matrix_user], |val| val.get(1)).unwrap(),
+            attached_to: stmt.query_row(params![&matrix_user], |val| val.get(2)).unwrap(),
+            is_admin: stmt.query_row(params![&matrix_user], |val| val.get::<usize, bool>(3)).unwrap(),
+            is_banned: stmt.query_row(params![&matrix_user], |val| val.get::<usize, bool>(4)).unwrap(),
+
+        } 
     }
 }
 
