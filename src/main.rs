@@ -11,6 +11,7 @@ use matrix_sdk::{
 };
 use tokio::time::{sleep, Duration};
 use chrono::prelude::*;
+use ruma::user_id;
 
 
 // Initializing i18
@@ -142,30 +143,38 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
     if event.sender == client.user_id().unwrap() {
         return Ok(());
     }
+    // Getting the interesting data :3
+    let MessageType::Text(text_content) = event.content.msgtype else { return Ok(()) };
+ 
 
+    // Initializing the database and then loading the current user BotUser struct.
+    // After doing so, we're now able to check whether the user is attached to a chat or not and then if
+    // their messages should be sent in the chat they're attached to.
     let conn = initialize_db("./db1.db");
-
-
     let mut bot_user: BotUser = match conn.query_row(
         "SELECT matrix_user FROM bot_users WHERE matrix_user=?1", 
         params![&event.sender.to_string()],
         |row| row.get::<usize, String>(0)
     ) {
-        Ok(_) => BotUser::user_from_db_row(event.sender.to_string(), &conn),
+        Ok(_) => BotUser::load_from_db(event.sender.to_string(), &conn).unwrap(),
         Err(_) => {
             let bot_user: BotUser = BotUser::initialize_user(event.sender.to_string());
             conn.execute(
-                "INSERT INTO bot_users (matrix_user, ticket_room, attached_to, is_admin, is_banned) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![&bot_user.matrix_user, &bot_user.ticket_room, &bot_user.attached_to, &bot_user.is_admin, &bot_user.is_banned],
+                "INSERT INTO bot_users (matrix_user, ticket_room, attached_to, as_anon, is_admin, is_banned) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![&bot_user.matrix_user, &bot_user.ticket_room, &bot_user.attached_to, &bot_user.as_anon, &bot_user.is_admin, &bot_user.is_banned],
             ).unwrap();
             bot_user
         }
     };
 
-    let MessageType::Text(text_content) = event.content.msgtype else { return Ok(()) };
+    if bot_user.attached_to != "" {
+        let mut attached_chat: FluxChatRoom = FluxChatRoom::load_from_db(bot_user.attached_to, &conn).unwrap();
+        let as_user: FluxChatUser = FluxChatUser::load_from_db(bot_user.matrix_user, bot_user.as_anon, &conn).unwrap();
+        attached_chat.send_message(as_user, &text_content.body, &conn, client.clone()).await.unwrap();
+        return Ok(())
+    }
 
-
-    if text_content.body.starts_with("!help") {
+   if text_content.body.starts_with("!help") {
         room.send(
             RoomMessageEventContent::text_html_auto(
                 t!("commands.help.message")
@@ -198,17 +207,24 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
                     }
                     if arg == "create" {
                             if bot_user.is_admin {
-                                let new_chat: FluxChatRoom = FluxChatRoom::admin_new(&bot_user.matrix_user, &conn).unwrap();
                                 if bot_user.attached_to != "" {
                                     () // TODO this should return a gigantic error because should be an unreachable point of the code,
                                        // No user should be in fact able to use any bot command while attached to a chat!
                                 } else {
-                                    bot_user.attached_to = new_chat.id.to_string()
+                                    let new_chat: FluxChatRoom = FluxChatRoom::admin_new(&bot_user.matrix_user, &conn).unwrap();
+                                    let new_flux_chat_user: FluxChatUser = FluxChatUser::initialize_user(
+                                        &bot_user.matrix_user,
+                                        options.anonymous,
+                                        &new_chat.id,
+                                        &conn
+                                    )?;
+                                    bot_user.as_anon = options.anonymous;
+                                    bot_user.attached_to = new_chat.id.to_string();
+                                    bot_user.push_to_db(&conn).unwrap();
+                                    new_chat.push_to_db(&conn).unwrap();
+                                    room.send(RoomMessageEventContent::text_html_auto(
+                                        t!("commands.chat.create.success", id=&new_chat.id, display_name=&new_flux_chat_user.display_name))).await.unwrap();
                                 }
-                                bot_user.push_to_db(&conn).unwrap();
-                                new_chat.push_to_db(&conn).unwrap();
-                                room.send(RoomMessageEventContent::text_html_auto(
-                                    t!("commands.chat.create.success", id=&new_chat.id))).await.unwrap();
                         } else {
                             if options.ticket {
                                 () // Create a ticket room
@@ -301,6 +317,7 @@ struct BotUser {
     matrix_user: String,
     ticket_room: String,
     attached_to: String,
+    as_anon: bool,
     is_admin: bool,
     is_banned: bool
 }
@@ -312,22 +329,24 @@ impl BotUser {
             matrix_user: matrix_user,
             ticket_room: String::new(),
             attached_to: String::new(),
+            as_anon: false,
             is_admin: false,
             is_banned: false
         }
     }
 
     /// Retrieve the user's struct for an user already in database
-    fn user_from_db_row(matrix_user: String, conn: &Connection) -> BotUser {
-        let mut stmt: Statement = conn.prepare("SELECT * FROM bot_users WHERE matrix_user=?1").unwrap();
-        BotUser {
+    fn load_from_db(matrix_user: String, conn: &Connection) -> anyhow::Result<BotUser> {
+        let mut stmt: Statement = conn.prepare("SELECT * FROM bot_users WHERE matrix_user=?1")?;
+        Result::Ok(BotUser {
             matrix_user: (&matrix_user).to_owned(),
-            ticket_room: stmt.query_row(params![&matrix_user], |val| val.get(1)).unwrap(),
-            attached_to: stmt.query_row(params![&matrix_user], |val| val.get(2)).unwrap(),
-            is_admin: stmt.query_row(params![&matrix_user], |val| val.get::<usize, bool>(3)).unwrap(),
-            is_banned: stmt.query_row(params![&matrix_user], |val| val.get::<usize, bool>(4)).unwrap(),
+            ticket_room: stmt.query_row(params![&matrix_user], |val| val.get(1))?,
+            attached_to: stmt.query_row(params![&matrix_user], |val| val.get(2))?,
+            as_anon: stmt.query_row(params![&matrix_user], |val| val.get::<usize, bool>(3))?,
+            is_admin: stmt.query_row(params![&matrix_user], |val| val.get::<usize, bool>(4))?,
+            is_banned: stmt.query_row(params![&matrix_user], |val| val.get::<usize, bool>(5))?,
 
-        } 
+        })
     }
 
 
@@ -340,9 +359,9 @@ impl BotUser {
     fn push_to_db(&self, conn: &Connection) -> anyhow::Result<BotUser> {
         conn.execute(
             "UPDATE bot_users
-            SET ticket_room=?1, attached_to=?2, is_admin=?3, is_banned=?4
-            WHERE matrix_user=?5",
-        params![&self.ticket_room, &self.attached_to, &self.is_admin, &self.is_banned, &self.matrix_user])?;
+            SET ticket_room=?1, attached_to=?2, as_anon=?3, is_admin=?4, is_banned=?5
+            WHERE matrix_user=?6",
+        params![&self.ticket_room, &self.attached_to, &self.as_anon, &self.is_admin, &self.is_banned, &self.matrix_user])?;
         Result::Ok(self.clone())
     }
 }
@@ -380,6 +399,52 @@ struct FluxChatUser {
     chat_id: String
 }
 
+impl FluxChatUser {
+    fn initialize_user(matrix_user: impl ToString, is_anon: bool, chat_id: impl ToString, conn: &Connection) -> anyhow::Result<FluxChatUser> {
+        if is_anon {
+            let mut generator = rand::thread_rng();
+            let new_user: FluxChatUser = FluxChatUser {
+                matrix_user: matrix_user.to_string(),
+                display_name: (0..=5).map(|_| char::from(generator.gen_range(65..=90))).collect(),
+                is_anon: is_anon,
+                chat_id: chat_id.to_string()
+            };
+            new_user.push_to_db(conn)?;
+            Result::Ok(new_user)
+        } else {
+            let new_user: FluxChatUser = FluxChatUser {
+                matrix_user: matrix_user.to_string(),
+                display_name: matrix_user.to_string(),
+                is_anon: is_anon,
+                chat_id: chat_id.to_string()
+            };
+            new_user.push_to_db(conn)?;
+            Result::Ok(new_user)
+        }
+
+    }
+
+    /// Pushes a FluxChatUser to database, please remember that FluxChatUsers should NOT BE updated,
+    /// this funcion purpose is to make the initial push only!
+    fn push_to_db(&self, conn: &Connection) -> anyhow::Result<FluxChatUser> {
+        conn.execute("INSERT INTO flux_chat_users (matrix_user, display_name, is_anon, chat_id) VALUES (?1, ?2, ?3, ?4)",
+    params![self.matrix_user, self.display_name, self.is_anon, self.chat_id])?;
+        Result::Ok(self.clone())
+    }
+
+    /// Loads an user from the database, it does a cross search with matrix_user and as_anon values
+    /// taken from a BotUser struct
+    fn load_from_db(matrix_user: String, as_anon: bool, conn: &Connection) -> anyhow::Result<FluxChatUser> {
+        let mut stmt = conn.prepare("SELECT * FROM flux_chat_users WHERE matrix_user=?1 AND is_anon=?2")?;
+        Result::Ok(FluxChatUser {
+            matrix_user: (&matrix_user).to_string(), 
+            display_name: stmt.query_row(params![&matrix_user, &as_anon], |row| row.get(1))?,
+            is_anon: stmt.query_row(params![&matrix_user, &as_anon], |row| row.get(2))?,
+            chat_id: stmt.query_row(params![&matrix_user, &as_anon], |row| row.get(3))?
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FluxChatRoom {
     id: String,
@@ -411,6 +476,17 @@ impl FluxChatRoom {
         })
     }
 
+    /// Retrieves a chat already in the database
+    fn load_from_db(chat_id: String, conn: &Connection) -> anyhow::Result<FluxChatRoom> {
+        let mut stmt: Statement<'_> = conn.prepare("SELECT * FROM flux_chat_rooms WHERE id=?1")?;
+        Result::Ok(FluxChatRoom {
+            id: (&chat_id).to_owned(),
+            creation_date: stmt.query_row(params![&chat_id], |row| row.get(1))?,
+            creator: stmt.query_row(params![&chat_id], |row| row.get(2))?,
+            is_closed: stmt.query_row(params![&chat_id], |row| row.get(3))?
+        })
+    }
+
     /// Updates the database with new FluxChatRoom values
     /// 
     /// Please, take note that any value that is
@@ -424,6 +500,24 @@ impl FluxChatRoom {
             WHERE id=?1",
         params![&self.id, &self.is_closed])?;
         Result::Ok(self.clone())
+    }
+
+    /// Send a message in the chat as FluxChatUser 
+    async fn send_message(&self, flux_user: FluxChatUser, message: &str, conn: &Connection, client: Client) -> anyhow::Result<String> {
+        let mut stmt = conn.prepare("SELECT * FROM bot_users 
+        INNER JOIN flux_chat_users 
+        ON bot_users.matrix_user=flux_chat_users.matrix_user 
+        AND flux_chat_users.is_anon=bot_users.as_anon 
+        AND bot_users.attached_to=flux_chat_users.chat_id 
+        WHERE chat_id=?1").unwrap();
+        let mut send_to = stmt.query_map(params![&self.id], |row| row.get::<usize, String>(0))?;
+        for user in send_to {
+            let user_id : ruma::OwnedUserId = user.as_deref().unwrap().parse().unwrap();
+            client.get_dm_room(&user_id).unwrap().send(RoomMessageEventContent::text_plain(message)).await.unwrap();
+        }
+        // There's a problem with the use of this function, in fact, we should give FluxChatUser an "active" status 
+        // in order to know whether to send them the chat messages
+        Result::Ok("fine".to_string())
     }
 }
 
@@ -452,6 +546,7 @@ pub fn initialize_db(path: impl AsRef<Path>) -> Connection {
                     matrix_user TEXT NOT NULL,
                     ticket_room TEXT,
                     attached_to TEXT,
+                    as_anon INTEGER,
                     is_admin INTEGER,
                     is_banned INTEGER
                 )",
