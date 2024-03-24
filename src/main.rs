@@ -221,7 +221,6 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: Room, client
                                     bot_user.as_anon = options.anonymous;
                                     bot_user.attached_to = new_chat.id.to_string();
                                     bot_user.push_to_db(&conn).unwrap();
-                                    new_chat.push_to_db(&conn).unwrap();
                                     room.send(RoomMessageEventContent::text_html_auto(
                                         t!("commands.chat.create.success", id=&new_chat.id, display_name=&new_flux_chat_user.display_name))).await.unwrap();
                                 }
@@ -515,8 +514,7 @@ impl FluxChatRoom {
             let user_id : ruma::OwnedUserId = user.as_deref().unwrap().parse().unwrap();
             client.get_dm_room(&user_id).unwrap().send(RoomMessageEventContent::text_plain(message)).await.unwrap();
         }
-        // There's a problem with the use of this function, in fact, we should give FluxChatUser an "active" status 
-        // in order to know whether to send them the chat messages
+        // TODO: Avoid sending the message to the sender too
         Result::Ok("fine".to_string())
     }
 }
